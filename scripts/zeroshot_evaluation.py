@@ -13,16 +13,27 @@ decord.bridge.set_bridge('torch')
 from decord import VideoReader
 
 
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+
 def get_features(model, processor, frames, device):
-    inputs = processor(images=frames, return_tensors="pt").to(device)
-    outputs = model(**inputs)
-    features = outputs.image_embeds 
-    return features.detach().cpu().numpy()
+    frame_chunks = chunks(frames, 32)
+    features = []
+    for chunk in frame_chunks:
+        inputs = processor(images=chunk, return_tensors="pt").to(device)
+        outputs = model(**inputs)
+        features.extend(outputs.image_embeds.detach().cpu().numpy())
+    features = np.array(features)
+    return features
 
 
 def load_frames(video_path, num_frames):
     vr = VideoReader(video_path)
     total_frames = len(vr)
+    num_frames = total_frames # added this to get features for all frames
     frame_ids = np.linspace(0, total_frames - 1, num_frames).astype(int)
     frames = vr.get_batch(frame_ids)
     return frames
@@ -53,20 +64,25 @@ def extract_frame_features(save_folder, model_string):
 
     model.to(device)
     
-    out = {}
     for video in tqdm(test_videos):
         label = video.split('/')[0]
         video_id = video.split('/')[1].replace('.avi', '')
+        if os.path.exists(os.path.join(save_folder, video_id + '.pkl')):
+            continue
+        
         frames = load_frames(os.path.join(videos_folder, video), num_frames)
-        frame_features = get_features(model, processor, frames, device)
-        out[video_id] = {}
-        out[video_id]['frame_features'] = frame_features
-        out[video_id]['label'] = label
-    pickle.dump(out, open(os.path.join(save_folder, 'video_features.pkl'), 'wb'))
-
+        try:
+            frame_features = get_features(model, processor, frames, device)
+        except:
+            print(f"error extracting features for video: {video_id} with shape {frames.shape}")
+            continue
+        out = {'frame_features': frame_features, 'label': label}
+        pickle.dump(out, open(os.path.join(save_folder, video_id + '.pkl'), 'wb'))
+       
 
 def extract_label_features(save_folder, model_string):
     templates = [
+        'a video of the person doing {}.',
         'a photo of a person {}.',
         'a video of a person {}.',
         'a example of a person {}.',
@@ -88,7 +104,6 @@ def extract_label_features(save_folder, model_string):
         'a example of a person doing {}.',
         'a demonstration of a person doing {}.',
         'a photo of the person doing {}.',
-        'a video of the person doing {}.',
         'a example of the person doing {}.',
         'a demonstration of the person doing {}.',
         'a photo of a person during {}.',
@@ -126,20 +141,22 @@ def extract_label_features(save_folder, model_string):
     out = {}
     for f in os.listdir(labels_folder):
         class_label = f.replace('.json', '')
-        class_label = class_label.replace(' ', '')
         sub_action_texts = json.load(open(os.path.join(labels_folder, f), 'r'))['text'].split('\n')
-        out[class_label] = []
-        for template in templates:
+        
+        for template in templates[:1]:
             input_string = template.format(class_label)[:-1]
-            inputs = [input_string + f" while {text}" for text in sub_action_texts]
+            inputs = [input_string + f" while {text[3:]}" for text in sub_action_texts]
+            #inputs = [input_string]
             inputs = tokenizer(inputs, padding=True, return_tensors="pt").to(device)
 
             outputs = model(**inputs)
             features = outputs.text_embeds
-            
+            class_label = class_label.replace(' ', '')
+            if class_label not in out:
+                out[class_label] = []
             out[class_label].append(features.cpu().detach().numpy())
 
-    pickle.dump(out, open(os.path.join(save_folder, 'label_features.pkl'), 'wb'))
+    return out
 
 
 if __name__ == '__main__':
@@ -147,14 +164,16 @@ if __name__ == '__main__':
     save_folder = "./openai_clip_vit_base_patch16"
     if not os.path.exists(save_folder):
         os.makedirs(save_folder)
-    #extract_label_features(save_folder, model_string)
-    #extract_frame_features(save_folder, model_string)
+    label_features = extract_label_features(save_folder, model_string)
+    extract_frame_features(save_folder, model_string)
     
-    video_features = pickle.load(open(os.path.join(save_folder, 'video_features.pkl'), 'rb'))
-    label_features = pickle.load(open(os.path.join(save_folder, 'label_features.pkl'), 'rb'))
+    test_videos = [line.rstrip() for line in open('/home/c3-0/datasets/UCF101/testlist01.txt', 'r').readlines()]
+    
     class_labels = list(label_features.keys())
     ground_truth, predictions = [], []
-    for video_id in tqdm(video_features):
+    for video in tqdm(test_videos):
+        video_id = video.split('/')[1].replace('.avi', '')
+        video_features = pickle.load(open(os.path.join(save_folder, video_id + '.pkl'), 'rb'))
         frame_features =  video_features[video_id]['frame_features']
         frame_features = torch.from_numpy(frame_features)
         video_label = video_features[video_id]['label']
@@ -164,13 +183,12 @@ if __name__ == '__main__':
         for class_label in class_labels:
             text_features = label_features[class_label]
             text_features = np.array(text_features)
-            #text_features = text_features[:, 0:1, :][:, None, :]
             num_templates, num_sub_actions = text_features.shape[0], text_features.shape[1]
             text_features = text_features.reshape(-1, text_features.shape[-1])
             text_features = torch.from_numpy(text_features)
             sim_matrx = (frame_features @ text_features.T).numpy()
             sim_matrx = sim_matrx.reshape(-1, num_templates, num_sub_actions)
-            score = np.mean(np.mean(np.mean(sim_matrx, axis=0), axis=0))
+            score = np.max(np.mean(np.mean(sim_matrx, axis=0), axis=0))
             scores.append(score)
         predictions.append(np.argmax(scores))
 

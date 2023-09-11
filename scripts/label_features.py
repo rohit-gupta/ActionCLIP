@@ -20,7 +20,8 @@ out = {}
 for f in os.listdir(labels_folder):
     class_label = f.replace('.json', '')
     sub_action_texts = json.load(open(os.path.join(labels_folder, f), 'r'))['text'].split('\n')
-    inputs = [f"a video of a person doing {class_label} while {text}" for text in sub_action_texts]
+    inputs = [f"a video of a person doing {class_label} while {text[3:]}" for text in sub_action_texts]
+    print(inputs)
     inputs = tokenizer(inputs, padding=True, return_tensors="pt").to(device)
 
     outputs = model(**inputs)
