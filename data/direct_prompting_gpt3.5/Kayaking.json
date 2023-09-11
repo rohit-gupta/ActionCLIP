@@ -1,0 +1,5 @@
+{
+ "text": "1. Paddle forward\n2. Paddle backward\n3. Turn left\n4. Turn right\n5. Balance\n6. Brace\n7. Eskimo roll\n8. T-rescue\n9. Self-rescue\n10. Towing\n11. Surfing\n12. Edging\n13. Ferrying\n14. Rolling\n15. Carving\n16. High brace\n17. Low brace\n18. Sculling draw\n19. Sweep stroke\n20. J-stroke",
+ "finish_reason": "stop",
+ "total_tokens": 158
+}
